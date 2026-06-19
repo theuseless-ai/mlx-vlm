@@ -42,6 +42,8 @@ from .generation import (
     get_quantized_kv_start,
     get_server_enable_thinking,
     get_server_max_tokens,
+    get_server_repetition_context_size,
+    get_server_repetition_penalty,
     get_server_thinking_budget,
     get_server_thinking_end_token,
     get_server_thinking_start_token,
@@ -175,11 +177,13 @@ def _build_gen_args(
         min_p=getattr(request, "min_p", 0.0),
         seed=getattr(request, "seed", None),
         logprobs=bool(getattr(request, "logprobs", False)),
-        repetition_penalty=getattr(request, "repetition_penalty", None),
+        repetition_penalty=_request_field_or_default(
+            request, "repetition_penalty", get_server_repetition_penalty()
+        ),
         repetition_context_size=_request_field_or_default(
             request,
             "repetition_context_size",
-            DEFAULT_REPETITION_CONTEXT_SIZE,
+            get_server_repetition_context_size() or DEFAULT_REPETITION_CONTEXT_SIZE,
         ),
         presence_penalty=getattr(request, "presence_penalty", None),
         presence_context_size=_request_field_or_default(
