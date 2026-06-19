@@ -45,6 +45,9 @@ class Eagle3Config(BaseModelConfig):
     tie_word_embeddings: bool = False
     norm_before_residual: bool = False
     norm_before_fc: bool = False
+    # TorchSpec EAGLE-3 variant: norm each of the 3 captured target hidden states
+    # separately (fc_norm.0/1/2) before concat+fc, instead of a single input_norm.
+    per_state_fc_norm: bool = False
     embed_requires_grad: bool = False
     eagle_aux_hidden_state_layer_ids: Optional[List[int]] = None
     block_size: int = 5

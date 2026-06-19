@@ -147,7 +147,65 @@ def load_drafter(
 
     path = get_model_path(path_or_repo)
     resolved = resolve_drafter_kind(path, kind)
+    # EAGLE-3 drafters aren't standalone models: their config advertises
+    # model_type="llama" so the generic loader builds a plain Llama and rejects the
+    # fc/fc_norm/hidden_norm fusion weights. Build the EAGLE-3 class explicitly.
+    if resolved == "eagle3":
+        return _load_eagle3_drafter(path, **kwargs), resolved
     return load_model(path, **kwargs), resolved
+
+
+def _load_eagle3_drafter(path, **kwargs):
+    """Construct an Eagle3DraftModel from a draft checkpoint and load its weights.
+
+    Handles the TorchSpec layout (flat transformer config at top level +
+    per-state ``fc_norm`` fusion), which the generic loader can't.
+    """
+    import glob
+
+    import mlx.core as mx
+
+    from .eagle3 import Eagle3DraftModel, TextConfig
+    from .eagle3 import ModelConfig as Eagle3Config
+
+    with open(path / "config.json") as f:
+        cfg = json.load(f)
+
+    weights = {}
+    for wf in glob.glob(str(path / "*.safetensors")):
+        weights.update(mx.load(wf))
+
+    # Flat TorchSpec config → build the nested transformer config explicitly.
+    text_cfg = TextConfig.from_dict(cfg)
+
+    # EAGLE-3 captures aux hidden states from specific TARGET layers. TorchSpec
+    # checkpoints don't store these in config.json, and the auto-default derives
+    # them from the 1-layer DRAFTER (→ [2,0,0], wrong). Use the config value if
+    # present, else an env override, else MiniMax-M3's documented [2, 30, 57].
+    import os
+
+    aux = cfg.get("eagle_aux_hidden_state_layer_ids")
+    if not aux:
+        env = os.environ.get("MLX_VLM_EAGLE3_AUX_LAYERS")
+        aux = [int(x) for x in env.split(",")] if env else [2, 30, 57]
+
+    eagle_cfg = Eagle3Config(
+        transformer_layer_config=text_cfg,
+        draft_vocab_size=int(cfg.get("draft_vocab_size", text_cfg.vocab_size)),
+        target_hidden_size=int(cfg.get("target_hidden_size", cfg.get("hidden_size"))),
+        tie_word_embeddings=bool(cfg.get("tie_word_embeddings", False)),
+        norm_before_residual=bool(cfg.get("norm_before_residual", False)),
+        norm_before_fc=bool(cfg.get("norm_before_fc", False)),
+        per_state_fc_norm=bool(cfg.get("fc_norm", False)),
+        eagle_aux_hidden_state_layer_ids=list(aux),
+        capture_layer_ids=list(aux),
+    )
+
+    model = Eagle3DraftModel(eagle_cfg)
+    model.load_weights(list(weights.items()))
+    if not kwargs.get("lazy", False):
+        mx.eval(model.parameters())
+    return model
 
 
 __all__ = [

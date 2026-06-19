@@ -184,6 +184,16 @@ class Eagle3DraftModel(nn.Module):
         else:
             self.input_norm = None
 
+        # TorchSpec variant: a per-state RMSNorm for each of the 3 captured target
+        # hidden states (fc_norm.0/1/2), applied before concat + fc.
+        if getattr(config, "per_state_fc_norm", False):
+            self.fc_norm = [
+                nn.RMSNorm(self.target_hidden_size, eps=text_config.rms_norm_eps)
+                for _ in range(3)
+            ]
+        else:
+            self.fc_norm = None
+
         if config.tie_word_embeddings and not self.uses_draft_vocab:
             self.lm_head = None
         else:
@@ -260,7 +270,13 @@ class Eagle3DraftModel(nn.Module):
     def _prepare_target_hidden(self, hidden: mx.array) -> mx.array:
         if hidden.shape[-1] == self.hidden_size:
             return hidden
-        if self.input_norm is not None:
+        if self.fc_norm is not None:
+            # TorchSpec: norm each of the 3 captured hidden states, then concat + fc.
+            parts = mx.split(hidden, 3, axis=-1)
+            hidden = mx.concatenate(
+                [norm(part) for norm, part in zip(self.fc_norm, parts)], axis=-1
+            )
+        elif self.input_norm is not None:
             hidden = self.input_norm(hidden)
         return self.fc(hidden)
 
