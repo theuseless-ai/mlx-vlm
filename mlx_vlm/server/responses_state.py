@@ -41,6 +41,7 @@ class ThinkingStreamState:
         ("<|channel>thought", "<channel|>"),
         ("<think>", "</think>"),
         ("<|START_THINKING|>", "<|END_THINKING|>"),
+        ("<mm:think>", "</mm:think>"),
     )
 
     def __init__(
