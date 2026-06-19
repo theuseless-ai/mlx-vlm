@@ -574,6 +574,11 @@ python -m mlx_vlm.convert --hf-path <local_dir> --mlx-path <mlx_dir>
                 weights = sanitize_weights(
                     model_class.AudioModel, weights, model_config.audio_config
                 )
+    elif getattr(model, "always_sanitize", False):
+        # Checkpoint is in mlx format, but the model's module layout may differ from
+        # when the checkpoint was produced (e.g. an older expert layout). The model's
+        # own sanitize() still needs to run to remap it.
+        weights = sanitize_weights(model, weights)
 
     if not has_quantization:
         quantization_config = config.get("quantization_config", None)

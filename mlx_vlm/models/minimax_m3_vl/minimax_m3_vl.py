@@ -53,6 +53,16 @@ def _sanitize_moe_weights(weights: dict, args):
     def pop_stack(keys):
         return mx.stack([weights.pop(key) for key in keys])
 
+    def pack_gate_up(prefix, suffix, gate, up, shared_gate, shared_up):
+        # gate/up: stacked routed experts [E, intermediate, ...]; shared_*: [intermediate, ...]
+        routed_gate_up = mx.concatenate([gate, up], axis=1)
+        shared_gate_up = mx.expand_dims(
+            mx.concatenate([shared_gate, shared_up], axis=0), axis=0
+        )
+        weights[f"{prefix}.switch_mlp.gate_up_proj.{suffix}"] = mx.concatenate(
+            [routed_gate_up, shared_gate_up], axis=0
+        )
+
     for layer_idx in range(args.num_hidden_layers):
         prefix = f"language_model.model.layers.{layer_idx}.block_sparse_moe"
 
@@ -62,23 +72,35 @@ def _sanitize_moe_weights(weights: dict, args):
                 up_keys = expert_keys(prefix, "w3", suffix)
                 shared_gate_key = f"{prefix}.shared_experts.gate_proj.{suffix}"
                 shared_up_key = f"{prefix}.shared_experts.up_proj.{suffix}"
+                # Pre-stacked MLX layout (e.g. mlx-community/MiniMax-M3-4bit):
+                # switch_mlp.{gate,up}_proj are already stacked [num_experts, ...]
+                # alongside a separate shared_experts.
+                pre_gate_key = f"{prefix}.switch_mlp.gate_proj.{suffix}"
+                pre_up_key = f"{prefix}.switch_mlp.up_proj.{suffix}"
                 if has_all([*gate_keys, *up_keys, shared_gate_key, shared_up_key]):
-                    gate = pop_stack(gate_keys)
-                    up = pop_stack(up_keys)
-                    shared_gate = weights.pop(shared_gate_key)
-                    shared_up = weights.pop(shared_up_key)
-                    routed_gate_up = mx.concatenate([gate, up], axis=1)
-                    shared_gate_up = mx.expand_dims(
-                        mx.concatenate([shared_gate, shared_up], axis=0), axis=0
+                    pack_gate_up(
+                        prefix, suffix,
+                        pop_stack(gate_keys), pop_stack(up_keys),
+                        weights.pop(shared_gate_key), weights.pop(shared_up_key),
                     )
-                    weights[f"{prefix}.switch_mlp.gate_up_proj.{suffix}"] = (
-                        mx.concatenate([routed_gate_up, shared_gate_up], axis=0)
+                elif has_all([pre_gate_key, pre_up_key, shared_gate_key, shared_up_key]):
+                    pack_gate_up(
+                        prefix, suffix,
+                        weights.pop(pre_gate_key), weights.pop(pre_up_key),
+                        weights.pop(shared_gate_key), weights.pop(shared_up_key),
                     )
 
                 down_keys = expert_keys(prefix, "w2", suffix)
                 shared_down_key = f"{prefix}.shared_experts.down_proj.{suffix}"
+                pre_down_key = f"{prefix}.switch_mlp.down_proj.{suffix}"
                 if has_all([*down_keys, shared_down_key]):
                     down = pop_stack(down_keys)
+                    shared_down = mx.expand_dims(weights.pop(shared_down_key), axis=0)
+                    weights[f"{prefix}.switch_mlp.down_proj.{suffix}"] = (
+                        mx.concatenate([down, shared_down], axis=0)
+                    )
+                elif has_all([pre_down_key, shared_down_key]):
+                    down = weights.pop(pre_down_key)
                     shared_down = mx.expand_dims(weights.pop(shared_down_key), axis=0)
                     weights[f"{prefix}.switch_mlp.down_proj.{suffix}"] = (
                         mx.concatenate([down, shared_down], axis=0)
@@ -123,6 +145,12 @@ class MiniMaxProjector(nn.Module):
 
 
 class Model(nn.Module):
+    # Some published mlx checkpoints (e.g. mlx-community/MiniMax-M3-4bit) use an older
+    # expert layout (pre-stacked switch_mlp + separate shared_experts). They are flagged
+    # format=mlx, so load_model would skip sanitize(); this opts back in so sanitize()
+    # can remap them to the current packed layout.
+    always_sanitize = True
+
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config
