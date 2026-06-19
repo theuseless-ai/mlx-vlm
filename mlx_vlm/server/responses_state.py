@@ -11,10 +11,22 @@ from fastapi import HTTPException
 
 RESPONSE_STORE_LIMIT = int(os.environ.get("MLX_VLM_RESPONSE_STORE_LIMIT", "1024"))
 _CONTENT_MARKERS = ("<|START_TEXT|>", "<|END_TEXT|>")
+# Thinking delimiters must never reach user-visible content. The opening tag is usually
+# template-primed (in the prompt, so never generated), while a closing tag can still slip
+# into the content stream when tool calls segment a thinking block — leaving an orphan
+# </mm:think>. Strip any stray delimiter, whichever pair, as a final safety net.
+_STRAY_THINKING_MARKERS = (
+    "<mm:think>",
+    "</mm:think>",
+    "<think>",
+    "</think>",
+    "<|START_THINKING|>",
+    "<|END_THINKING|>",
+)
 
 
 def _strip_content_markers(text: str) -> str:
-    for marker in _CONTENT_MARKERS:
+    for marker in _CONTENT_MARKERS + _STRAY_THINKING_MARKERS:
         text = text.replace(marker, "")
     return text
 
