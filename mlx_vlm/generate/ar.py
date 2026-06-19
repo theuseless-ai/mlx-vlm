@@ -719,6 +719,12 @@ def _make_cache(
             return cache.CacheList(*(to_batch_cache(sub_c) for sub_c in c.caches))
         elif isinstance(c, tuple):
             return cache.CacheList(*(to_batch_cache(sub_c) for sub_c in c))
+        elif hasattr(c, "to_batch") and callable(getattr(c, "to_batch")):
+            # Custom caches (e.g. MiniMax-M3's MiniMaxM3KVCache) ship their own
+            # batched builder. PR #1374 added MiniMaxM3BatchKVCache + to_batch()
+            # but never wired it here, so M3 hit the raise below. Duck-type it.
+            # (cherry-picked from drew913s, ivanfioravanti/mlx-vlm#2 fix 3)
+            return c.to_batch(left_padding)
         else:
             raise ValueError(f"{type(c)} does not yet support batching")
 
